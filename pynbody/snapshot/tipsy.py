@@ -205,13 +205,15 @@ class TipsySnap(SimSnap):
                 # Read in the block
 
                 if mem_index is None:
+                # Fold any byteswap into the dtype, so that numpy performs it as part of the copy
+                # into the destination arrays rather than making a separate pass over each buffer.
+                # 'S' (swap) rather than '>' (big-endian) keeps this correct on big-endian hosts.
+                read_dtype = dtype.newbyteorder('S') if self._byteswap else dtype
+
                     f.seek(st_len * readlen, 1)
                     continue
 
-                buf = np.frombuffer(f.read(st_len * readlen), dtype=dtype)
-
-                if self._byteswap:
-                    buf = buf.byteswap()
+                buf = np.frombuffer(f.read(st_len * readlen), dtype=read_dtype)
 
                 if fam in self.families() and mem_index is not None:
                     # Copy into the correct arrays
