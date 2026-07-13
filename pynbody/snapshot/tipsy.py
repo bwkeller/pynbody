@@ -197,29 +197,49 @@ class TipsySnap(SimSnap):
         if "vel" in write:
             write += ['vx', 'vy', 'vz']
 
+        families_in_memory = self.families()
 
         for fam, dtype in ((family.gas, self._g_dtype), (family.dm, self._d_dtype), (family.star, self._s_dtype)):
-            self_fam = self[fam]
             st_len = dtype.itemsize
+
+            # Fold any byteswap into the dtype, so that numpy performs it as
+            # part of the copy into the destination arrays rather than making a
+            # separate pass over each buffer.  'S' (swap) rather than '>'
+            # (big-endian) keeps this correct on big-endian hosts.
+            read_dtype = dtype.newbyteorder('S') if self._byteswap else dtype
+
+            # Resolve the destination arrays once per family, as plain ndarray
+            # views into the snapshot's arrays. Indexing self[fam][name] inside
+            # the chunk loop instead would construct a fresh FamilySubSnap for
+            # every field of every chunk, which dominates the cost of the load.
+            # Writing through the views is safe here because every array named
+            # in 'write' was created above, so no derived array can yet depend
+            # on it.
+            targets = {}
+            if fam in families_in_memory:
+                self_fam = self[fam]
+                for name in dtype.names:
+                    if name in write:
+                        target = self_fam[name]
+                        if not isinstance(target, np.ndarray):
+                            raise TypeError(
+                                f"Destination array {name!r} for family {fam} is not a view onto "
+                                "the snapshot's memory; refusing to load into a copy")
+                        targets[name] = target.view(np.ndarray)
+
             for readlen, buf_index, mem_index in self._load_control.iterate([fam], [fam], multiskip=True):
-                # Read in the block
-
-                if mem_index is None:
-                # Fold any byteswap into the dtype, so that numpy performs it as part of the copy
-                # into the destination arrays rather than making a separate pass over each buffer.
-                # 'S' (swap) rather than '>' (big-endian) keeps this correct on big-endian hosts.
-                read_dtype = dtype.newbyteorder('S') if self._byteswap else dtype
-
+                # Skip over anything we don't need, rather than reading and
+                # discarding it. Note that this must happen even for families
+                # which are absent from memory, so that the file offset stays
+                # in step with the families which follow.
+                if mem_index is None or len(targets) == 0:
                     f.seek(st_len * readlen, 1)
                     continue
 
                 buf = np.frombuffer(f.read(st_len * readlen), dtype=read_dtype)
 
-                if fam in self.families() and mem_index is not None:
-                    # Copy into the correct arrays
-                    for name in dtype.names:
-                        if name in write:
-                            self_fam[name][mem_index] = buf[name][buf_index]
+                for name, target in targets.items():
+                    target[mem_index] = buf[name][buf_index]
 
         f.close()
 
