@@ -403,6 +403,69 @@ def test_read_starlog_with_log(snap):
     h2form = snap.s['h2form'][:1000:100]
     assert np.all(np.abs(h2form - correct) < 1e-7)
 
+def test_native_precision(snap):
+    """native_precision stores the main file arrays at the precision they have on disk"""
+    f = pynbody.load("testdata/gasoline_ahf/g15784.lr.01024", native_precision=True)
+
+    for name in ('pos', 'vel', 'mass', 'eps', 'phi'):
+        assert f[name].dtype == np.float32
+        assert f[name].units == snap[name].units
+        # the default load promotes the same single-precision values to double, so the arrays
+        # must agree exactly, not merely to within float32 tolerance
+        npt.assert_array_equal(f[name], snap[name])
+
+    for name in ('rho', 'temp', 'metals'):
+        assert f.gas[name].dtype == np.float32
+        npt.assert_array_equal(f.gas[name], snap.gas[name])
+
+    for name in ('metals', 'tform'):
+        assert f.star[name].dtype == np.float32
+        npt.assert_array_equal(f.star[name], snap.star[name])
+
+
+def test_native_precision_off_by_default(snap):
+    """Without native_precision, arrays are promoted to double as they always have been"""
+    assert snap['pos'].dtype == np.float64
+    assert snap['mass'].dtype == np.float64
+    assert snap.gas['rho'].dtype == np.float64
+    assert snap.star['tform'].dtype == np.float64
+
+
+def test_native_precision_with_double_pos(tmp_path):
+    """Where the file stores doubles, native precision is double, so pos/vel must not be truncated"""
+    f = pynbody.new(gas=10, dm=10, star=10)
+    rng = np.random.default_rng(1)
+    # offset so that the values cannot be represented exactly in single precision
+    f['pos'] = rng.random((30, 3)) * 1e-3 + 1.0000000123456789
+    f['vel'] = rng.random((30, 3)) * 1e-3 + 1.0000000123456789
+    f['mass'] = rng.random(30)
+    f['eps'] = 0.1
+    f['phi'] = 0.0
+    f.gas['rho'] = 1.0
+    f.gas['temp'] = 1e4
+    f.gas['metals'] = 0.02
+    f.star['metals'] = 0.01
+    f.star['tform'] = 0.5
+    expected_pos = np.array(f['pos'], dtype=np.float64)
+    expected_vel = np.array(f['vel'], dtype=np.float64)
+
+    filename = str(tmp_path / "double.tipsy")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        f.write(fmt=pynbody.snapshot.tipsy.TipsySnap, filename=filename,
+                double_pos=True, double_vel=True)
+    with open(tmp_path / "double.param", "w") as paramfile:
+        paramfile.write("dKpcUnit = 1.0\ndMsolUnit = 1.0\nbDoublePos = 1\nbDoubleVel = 1\n")
+
+    f2 = pynbody.load(filename, native_precision=True)
+
+    assert f2['pos'].dtype == np.float64
+    assert f2['vel'].dtype == np.float64
+    assert f2['mass'].dtype == np.float32
+    npt.assert_array_equal(np.asarray(f2['pos'], dtype=np.float64), expected_pos)
+    npt.assert_array_equal(np.asarray(f2['vel'], dtype=np.float64), expected_vel)
+
+
 @pytest.fixture
 def no_paramfile_snap():
     import pathlib

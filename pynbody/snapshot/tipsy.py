@@ -15,6 +15,16 @@ automatically via pynbody.load.
 specified, the loader will look for a file `*.param` in the current and
 parent directories.
 
+*native_precision*: if True, arrays from the main file are stored at the precision with which
+they are written on disk, instead of being promoted to pynbody's default double precision. Tipsy
+files store all quantities in single precision, except for positions and velocities when the
+parameter file sets ``bDoublePos`` or ``bDoubleVel``. Since no precision is gained by the
+promotion, this roughly halves the memory needed to hold a snapshot, and makes loading faster.
+Defaults to False, which preserves the historical behaviour.
+
+.. versionadded:: 2.5
+    The *native_precision* keyword.
+
 """
 
 import copy
@@ -58,6 +68,8 @@ class TipsySnap(SimSnap):
 
         must_have_paramfile = kwargs.get('must_have_paramfile', False)
         take = kwargs.get('take', None)
+
+        self._native_precision = kwargs.get('native_precision', False)
 
         self.partial_load = take is not None
 
@@ -146,9 +158,22 @@ class TipsySnap(SimSnap):
 
         write = []
 
+        # With native_precision, each array is created with the dtype it has on disk. Only pos and
+        # vel can be double there (when bDoublePos/bDoubleVel are set); everything else tipsy writes
+        # is single. A dtype of None leaves _create_array to use pynbody's default, which is double.
+        if self._native_precision:
+            on_disk_dtype = {'pos': self._g_dtype['x'], 'vel': self._g_dtype['vx']}
+            default_dtype = self._g_dtype['mass']
+        else:
+            on_disk_dtype = {}
+            default_dtype = None
+
+        def dtype_for(array_name):
+            return on_disk_dtype.get(array_name, default_dtype)
+
         for w, ndim in ("pos", 3), ("vel", 3), ("mass", 1), ("eps", 1), ("phi", 1):
             if w not in list(self.keys()):
-                self._create_array(w, ndim, zeros=False)
+                self._create_array(w, ndim, dtype=dtype_for(w), zeros=False)
                 write.append(w)
 
         for k in "pos", "vel", "mass", "eps", "phi":
@@ -158,11 +183,11 @@ class TipsySnap(SimSnap):
         if 'gas' in self.families():
             for w in "rho", "temp":
                 if w not in list(self.gas.keys()):
-                    self.gas._create_array(w, zeros=False)
+                    self.gas._create_array(w, dtype=dtype_for(w), zeros=False)
                     write.append(w)
 
             if "metals" not in list(self.gas.keys()):
-                self.gas._create_array("metals", zeros=False)
+                self.gas._create_array("metals", dtype=dtype_for("metals"), zeros=False)
                 write.append("metals")
 
             if "temp" in write:
@@ -174,12 +199,12 @@ class TipsySnap(SimSnap):
 
         if 'star' in self.families():
             if "metals" not in list(self.star.keys()):
-                self.star._create_array("metals", zeros=False)
+                self.star._create_array("metals", dtype=dtype_for("metals"), zeros=False)
                 if "metals" not in write:
                     write.append("metals")
 
             if "tform" not in list(self.star.keys()):
-                self.star._create_array("tform", zeros=False)
+                self.star._create_array("tform", dtype=dtype_for("tform"), zeros=False)
                 write.append("tform")
 
             for k in "metals", "tform":
