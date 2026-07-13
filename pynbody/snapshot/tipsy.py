@@ -197,9 +197,6 @@ class TipsySnap(SimSnap):
         if "vel" in write:
             write += ['vx', 'vy', 'vz']
 
-        max_item_size = max(
-            q.itemsize for q in (self._g_dtype, self._d_dtype, self._s_dtype))
-        tbuf = bytearray(max_item_size * 10240)
 
         for fam, dtype in ((family.gas, self._g_dtype), (family.dm, self._d_dtype), (family.star, self._s_dtype)):
             self_fam = self[fam]
